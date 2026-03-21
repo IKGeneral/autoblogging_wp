@@ -1,0 +1,35 @@
+{
+  "_meta": {
+    "plugin": "AutoBlog Pro",
+    "version": "2.0.0",
+    "agency": "Nigerian Web Design & Development Agency"
+  },
+  "pipeline": {
+    "steps": [
+      {
+        "id": "keyword_research",
+        "name": "Keyword Research & Topic Intelligence",
+        "system_prompt": "You are an expert SEO strategist specialising in the Nigerian digital market. You have deep knowledge of how Nigerian businesses search for web design and digital services online. Your keyword research is always commercially focused.",
+        "user_prompt_template": "Perform comprehensive keyword research for a blog post about: {{TOPIC}}\n\nAgency context: Nigerian web design and development agency serving SMEs, startups, and established businesses across Nigeria and Africa.\n\nDeliver your keyword research as a JSON object with this exact structure:\n{\n  \"primary_keyword\": \"exact phrase\",\n  \"secondary_keywords\": [\"3-5 keywords\"],\n  \"lsi_keywords\": [\"8-12 terms\"],\n  \"search_intent\": \"informational | commercial\",\n  \"target_audience_description\": \"who is searching\"\n}\n\nReturn ONLY valid JSON."
+      },
+      {
+        "id": "content_outline",
+        "name": "SEO Content Outline & Structure",
+        "system_prompt": "You are a senior content strategist and SEO architect. You create blog post outlines that satisfy both Google's ranking algorithms and real human readers.",
+        "user_prompt_template": "Create a detailed SEO content outline for a blog post using this keyword research:\n\n{{KEYWORD_RESEARCH_JSON}}\n\nTopic: {{TOPIC}}\n\nReturn a JSON object with this structure:\n{\n  \"post_title\": \"SEO-optimised title\",\n  \"meta_description\": \"compelling meta description\",\n  \"slug\": \"url-friendly-slug\",\n  \"outline\": [\n    {\n      \"section_type\": \"introduction\",\n      \"h_tag\": \"H2\",\n      \"heading\": \"Section Heading\",\n      \"key_points\": [\"point 1\", \"point 2\"]\n    }\n  ]\n}\n\nReturn ONLY valid JSON."
+      },
+      {
+        "id": "content_draft",
+        "name": "Human-Tone Full Article Draft",
+        "system_prompt": "You are an expert content writer for a leading Nigerian web design and development agency. Write blog posts that sound fully human, demonstrate real expertise, and serve the reader first.",
+        "user_prompt_template": "Write a complete blog post using this outline and keyword research.\n\nOUTLINE:\n{{OUTLINE_JSON}}\n\nKEYWORD RESEARCH:\n{{KEYWORD_RESEARCH_JSON}}\n\nTOPIC: {{TOPIC}}\n\nReturn the complete HTML article body. Start with the H1 title tag. Include all sections from the outline. Do not include markdown formatting like ```html, just the raw HTML."
+      },
+      {
+        "id": "seo_meta",
+        "name": "SEO Meta & Schema Generation",
+        "system_prompt": "You are an SEO meta specialist and schema markup expert.",
+        "user_prompt_template": "Generate complete SEO meta data for this article.\n\nARTICLE TITLE: {{POST_TITLE}}\nPRIMARY KEYWORD: {{PRIMARY_KEYWORD}}\n\nReturn a JSON object:\n{\n  \"seo\": {\n    \"title\": \"SEO title\",\n    \"meta_description\": \"meta description\"\n  },\n  \"post_tags\": [\"tag1\", \"tag2\"],\n  \"post_categories\": [\"Category\"]\n}\n\nReturn ONLY valid JSON."
+      }
+    ]
+  }
+}

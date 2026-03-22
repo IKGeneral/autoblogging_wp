@@ -56,13 +56,34 @@ export default function App() {
   
   const [provider, setProvider] = useState<'gemini' | 'openai'>('gemini');
   const [textModel, setTextModel] = useState('gemini-3.1-flash-preview');
-  const [imageModel, setImageModel] = useState('gemini-2.5-flash-image');
+  const [imageModel, setImageModel] = useState('gemini-3.1-flash-image-preview');
   const [availableModels, setAvailableModels] = useState<string[]>([]);
   const [isLoadingModels, setIsLoadingModels] = useState(false);
   const [steps, setSteps] = useState<PipelineStep[]>(INITIAL_STEPS);
   const [isRunning, setIsRunning] = useState(false);
   const [isPublishing, setIsPublishing] = useState(false);
   const [finalResult, setFinalResult] = useState<any>(null);
+  const [hasApiKey, setHasApiKey] = useState<boolean | null>(null);
+
+  useEffect(() => {
+    const checkApiKey = async () => {
+      if (window.aistudio && window.aistudio.hasSelectedApiKey) {
+        const hasKey = await window.aistudio.hasSelectedApiKey();
+        setHasApiKey(hasKey);
+      } else {
+        setHasApiKey(true); // Fallback if not in AI Studio
+      }
+    };
+    checkApiKey();
+  }, []);
+
+  const handleSelectApiKey = async () => {
+    if (window.aistudio && window.aistudio.openSelectKey) {
+      await window.aistudio.openSelectKey();
+      setHasApiKey(true); // Assume success to mitigate race condition
+    }
+  };
+
   const [apiKeys, setApiKeys] = useState(() => {
     const saved = localStorage.getItem('autoblog_api_keys');
     const parsed = saved ? JSON.parse(saved) : {};
@@ -218,6 +239,26 @@ export default function App() {
 
   return (
     <div className="min-h-screen bg-zinc-50 flex font-sans text-zinc-900">
+      {hasApiKey === false && provider === 'gemini' && (imageModel === 'gemini-3.1-flash-image-preview' || imageModel === 'gemini-3-pro-image-preview') && (
+        <div className="fixed inset-0 bg-black/50 backdrop-blur-sm z-50 flex items-center justify-center">
+          <div className="bg-white rounded-2xl p-8 max-w-md w-full shadow-2xl">
+            <h2 className="text-2xl font-bold mb-4">API Key Required</h2>
+            <p className="text-zinc-600 mb-6">
+              To use the advanced Gemini Image Preview models, you must select your own Google Cloud API key with billing enabled.
+              <br /><br />
+              <a href="https://ai.google.dev/gemini-api/docs/billing" target="_blank" rel="noreferrer" className="text-emerald-600 hover:underline">
+                Learn more about billing
+              </a>
+            </p>
+            <button
+              onClick={handleSelectApiKey}
+              className="w-full bg-emerald-600 hover:bg-emerald-700 text-white font-medium py-3 px-4 rounded-xl transition-colors"
+            >
+              Select API Key
+            </button>
+          </div>
+        </div>
+      )}
       {/* Sidebar */}
       <aside className="w-64 bg-zinc-950 text-zinc-300 flex flex-col">
         <div className="p-6 border-b border-zinc-800">
@@ -353,7 +394,7 @@ export default function App() {
                           if (e.target.value === 'openai') {
                             setImageModel('dall-e-3');
                           } else {
-                            setImageModel('gemini-2.5-flash-image');
+                            setImageModel('gemini-3.1-flash-image-preview');
                           }
                         }}
                         className="w-full bg-zinc-50 border border-zinc-200 rounded-xl px-4 py-2.5 outline-none focus:ring-2 focus:ring-emerald-500/20 focus:border-emerald-500 transition-all"
@@ -387,8 +428,9 @@ export default function App() {
                       >
                         {provider === 'gemini' ? (
                           <>
-                            <option value="gemini-2.5-flash-image">gemini-2.5-flash-image</option>
                             <option value="gemini-3.1-flash-image-preview">gemini-3.1-flash-image-preview</option>
+                            <option value="gemini-3-pro-image-preview">gemini-3-pro-image-preview</option>
+                            <option value="gemini-2.5-flash-image">gemini-2.5-flash-image</option>
                           </>
                         ) : (
                           <>

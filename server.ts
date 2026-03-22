@@ -9,9 +9,10 @@ import dotenv from 'dotenv';
 dotenv.config();
 
 const app = express();
-const PORT = process.env.PORT || 3000;
+const PORT = 3000;
 
-app.use(express.json());
+app.use(express.json({ limit: '50mb' }));
+app.use(express.urlencoded({ limit: '50mb', extended: true }));
 
 // Load config
 const configPath = path.join(process.cwd(), 'autoblog-config.json');
@@ -88,9 +89,17 @@ async function generateImage(options: {
       return `data:image/png;base64,${response.data[0].b64_json}`;
     } else {
       const ai = new GoogleGenAI({ apiKey: options.apiKey });
+      const uniquePrompt = `${options.prompt} [Unique seed: ${Date.now()}-${Math.random().toString(36).substring(7)}]`;
+      const isAdvancedModel = options.model?.includes('3.1') || options.model?.includes('3-pro');
       const response = await ai.models.generateContent({
-        model: options.model || 'gemini-2.5-flash-image',
-        contents: options.prompt,
+        model: options.model || 'gemini-3.1-flash-image-preview',
+        contents: uniquePrompt,
+        config: {
+          imageConfig: {
+            aspectRatio: "16:9",
+            ...(isAdvancedModel ? { imageSize: "1K" } : {})
+          }
+        }
       });
       
       for (const part of response.candidates?.[0]?.content?.parts || []) {
@@ -110,7 +119,8 @@ async function generateImage(options: {
 
 // Models Endpoint
 app.post('/api/models', async (req, res) => {
-  const { provider, apiKey } = req.body;
+  const { provider, apiKey: clientKey } = req.body;
+  const apiKey = clientKey || process.env.API_KEY || process.env.GEMINI_API_KEY || '';
   try {
     if (!apiKey) {
       return res.json({ models: [] });
@@ -149,15 +159,15 @@ app.get('/api/topics/generate', async (req, res) => {
     const provider = (req.query.provider as string) || 'gemini';
     const model = (req.query.model as string) || 'gemini-3.1-flash-preview';
     const clientKey = req.query.apiKey as string;
-    const apiKey = clientKey || process.env.GEMINI_API_KEY || '';
+    const apiKey = clientKey || process.env.API_KEY || process.env.GEMINI_API_KEY || '';
     if (!apiKey || apiKey === 'MY_GEMINI_API_KEY') {
       throw new Error('API Key is not set.');
     }
     const currentYear = new Date().getFullYear();
     
-    const prompt = `You are an expert SEO strategist for a Nigerian web design agency. The current year is ${currentYear}. 
+    const prompt = `You are an expert SEO strategist for a Nigerian WordPress web design and development agency. The current year is ${currentYear}. 
     Research and generate 5 trending, highly relevant, long-tail keyword topics for blog posts. 
-    Focus on what Nigerian businesses, SMEs, and startups are searching for right now in ${currentYear}. 
+    Focus exclusively on WordPress-related topics that Nigerian businesses, SMEs, and startups are searching for right now in ${currentYear} (e.g., WooCommerce, WordPress security, WordPress speed optimization, custom WordPress design, etc.). 
     Do not use outdated years like 2024 or 2025.
     Return ONLY a JSON array of 5 strings, where each string is a compelling blog post title/topic.`;
 
@@ -182,7 +192,7 @@ app.get('/api/pipeline/stream', async (req, res) => {
   const topic = req.query.topic as string;
   const provider = (req.query.provider as string) || 'gemini';
   const textModel = (req.query.textModel as string) || 'gemini-3.1-flash-preview';
-  const imageModel = (req.query.imageModel as string) || 'gemini-2.5-flash-image';
+  const imageModel = (req.query.imageModel as string) || 'gemini-3.1-flash-image-preview';
   const clientKey = req.query.apiKey as string;
   
   res.setHeader('Content-Type', 'text/event-stream');
@@ -200,7 +210,7 @@ app.get('/api/pipeline/stream', async (req, res) => {
   }
 
   try {
-    const apiKey = clientKey || process.env.GEMINI_API_KEY || '';
+    const apiKey = clientKey || process.env.API_KEY || process.env.GEMINI_API_KEY || '';
     console.log(`Initializing ${provider} with API key of length: ${apiKey.length}`);
     if (!apiKey || apiKey === 'MY_GEMINI_API_KEY') {
       throw new Error('API Key is not set. Please select an API key or add it in the Settings tab.');
@@ -295,29 +305,52 @@ app.get('/api/pipeline/stream', async (req, res) => {
         const finalImagePrompt = promptData.image_prompt || `A professional, high-quality blog featured image for a Nigerian web design agency. Topic: ${topic}. Style: modern, corporate, vibrant, African business context.`;
 
         // Then generate the image
-        const base64Image = await generateImage({
-          provider,
-          model: imageModel,
-          apiKey,
-          prompt: finalImagePrompt,
-        });
-        
-        if (base64Image) {
-          finalResult.image = base64Image;
-          sendEvent('featured_image', 'completed', { url: base64Image });
-        } else {
-          throw new Error("No image generated");
+        let base64Image;
+        try {
+          base64Image = await generateImage({
+            provider,
+            model: imageModel,
+            apiKey,
+            prompt: finalImagePrompt,
+          });
+          
+          if (!base64Image) {
+            throw new Error("No image generated");
+          }
+        } catch (e: any) {
+          console.error("Image generation failed:", e.message);
+          // Fallback: Fetch a relevant image from Unsplash/Picsum and convert to base64
+          const seed = encodeURIComponent(topic.replace(/\s+/g, '-').toLowerCase() + '-' + Date.now());
+          const fallbackUrl = `https://picsum.photos/seed/${seed}/1200/800`;
+          const imgRes = await fetch(fallbackUrl);
+          const arrayBuffer = await imgRes.arrayBuffer();
+          const buffer = Buffer.from(arrayBuffer);
+          base64Image = `data:image/jpeg;base64,${buffer.toString('base64')}`;
         }
-      } catch (e) {
-        console.error("Image generation failed", e);
-        const fallbackUrl = `https://images.unsplash.com/photo-1499951360447-b19be8fe80f5?w=1200&q=80`;
-        finalResult.image = fallbackUrl;
-        sendEvent('featured_image', 'completed', { url: fallbackUrl });
+        
+        finalResult.image = base64Image;
+        sendEvent('featured_image', 'completed', { url: base64Image });
+      } catch (e: any) {
+        console.error("Featured image step failed:", e.message);
+        // Ultimate fallback
+        const seed = Date.now().toString();
+        const fallbackUrl = `https://picsum.photos/seed/${seed}/1200/800`;
+        const imgRes = await fetch(fallbackUrl);
+        const arrayBuffer = await imgRes.arrayBuffer();
+        const buffer = Buffer.from(arrayBuffer);
+        const base64Image = `data:image/jpeg;base64,${buffer.toString('base64')}`;
+        finalResult.image = base64Image;
+        sendEvent('featured_image', 'completed', { url: base64Image });
       }
     } else {
-      const fallbackUrl = `https://images.unsplash.com/photo-1499951360447-b19be8fe80f5?w=1200&q=80`;
-      finalResult.image = fallbackUrl;
-      sendEvent('featured_image', 'completed', { url: fallbackUrl });
+      const seed = Date.now().toString();
+      const fallbackUrl = `https://picsum.photos/seed/${seed}/1200/800`;
+      const imgRes = await fetch(fallbackUrl);
+      const arrayBuffer = await imgRes.arrayBuffer();
+      const buffer = Buffer.from(arrayBuffer);
+      const base64Image = `data:image/jpeg;base64,${buffer.toString('base64')}`;
+      finalResult.image = base64Image;
+      sendEvent('featured_image', 'completed', { url: base64Image });
     }
 
     // Step 5: SEO Meta

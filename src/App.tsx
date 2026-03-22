@@ -11,13 +11,23 @@ import {
   Search,
   ListTree,
   Tags,
-  Globe
+  Globe,
+  Sparkles
 } from 'lucide-react';
 import { clsx, type ClassValue } from 'clsx';
 import { twMerge } from 'tailwind-merge';
 
 function cn(...inputs: ClassValue[]) {
   return twMerge(clsx(inputs));
+}
+
+declare global {
+  interface Window {
+    aistudio?: {
+      hasSelectedApiKey: () => Promise<boolean>;
+      openSelectKey: () => Promise<void>;
+    };
+  }
 }
 
 type StepStatus = 'idle' | 'running' | 'completed' | 'failed';
@@ -39,11 +49,118 @@ const INITIAL_STEPS: PipelineStep[] = [
 ];
 
 export default function App() {
+  const [suggestedTopics, setSuggestedTopics] = useState<string[]>([]);
+  const [isGeneratingTopics, setIsGeneratingTopics] = useState(false);
+  const [activeTab, setActiveTab] = useState<'dashboard' | 'calendar' | 'settings'>('dashboard');
   const [topic, setTopic] = useState('How much does a website cost in Nigeria');
+  
+  const [provider, setProvider] = useState<'gemini' | 'openai'>('gemini');
+  const [textModel, setTextModel] = useState('gemini-3.1-flash-preview');
+  const [imageModel, setImageModel] = useState('gemini-2.5-flash-image');
+  const [availableModels, setAvailableModels] = useState<string[]>([]);
+  const [isLoadingModels, setIsLoadingModels] = useState(false);
   const [steps, setSteps] = useState<PipelineStep[]>(INITIAL_STEPS);
   const [isRunning, setIsRunning] = useState(false);
+  const [isPublishing, setIsPublishing] = useState(false);
   const [finalResult, setFinalResult] = useState<any>(null);
+  const [apiKeys, setApiKeys] = useState(() => {
+    const saved = localStorage.getItem('autoblog_api_keys');
+    const parsed = saved ? JSON.parse(saved) : {};
+    return { 
+      gemini: '', openai: '', anthropic: '', 
+      wpUrl: '', wpUser: '', wpPassword: '', 
+      ...parsed 
+    };
+  });
   const eventSourceRef = useRef<EventSource | null>(null);
+
+  useEffect(() => {
+    const fetchModels = async () => {
+      const apiKey = provider === 'gemini' ? apiKeys.gemini : apiKeys.openai;
+      if (!apiKey) {
+        setAvailableModels([]);
+        return;
+      }
+      setIsLoadingModels(true);
+      try {
+        const res = await fetch('/api/models', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ provider, apiKey })
+        });
+        const data = await res.json();
+        if (data.models && data.models.length > 0) {
+          setAvailableModels(data.models);
+          if (!data.models.includes(textModel)) {
+            setTextModel(data.models[0]);
+          }
+        } else {
+          setAvailableModels([]);
+        }
+      } catch (e) {
+        console.error("Failed to fetch models", e);
+        setAvailableModels([]);
+      }
+      setIsLoadingModels(false);
+    };
+
+    fetchModels();
+  }, [provider, apiKeys.gemini, apiKeys.openai]);
+
+  const saveApiKeys = (keys: any) => {
+    setApiKeys(keys);
+    localStorage.setItem('autoblog_api_keys', JSON.stringify(keys));
+  };
+
+  const publishToWordPress = async () => {
+    if (!apiKeys.wpUrl || !apiKeys.wpUser || !apiKeys.wpPassword) {
+      alert("Please configure your WordPress credentials in the Settings tab first.");
+      setActiveTab('settings');
+      return;
+    }
+
+    setIsPublishing(true);
+    try {
+      const res = await fetch('/api/publish', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          title: finalResult?.outline?.post_title || topic,
+          content: finalResult?.draft,
+          wpUrl: apiKeys.wpUrl,
+          wpUser: apiKeys.wpUser,
+          wpPassword: apiKeys.wpPassword,
+          imageBase64: finalResult?.image
+        })
+      });
+      const data = await res.json();
+      if (data.success) {
+        alert('Successfully published to WordPress as Draft! URL: ' + data.url);
+      } else {
+        alert('Failed to publish: ' + data.error);
+      }
+    } catch (e: any) {
+      alert('Error publishing: ' + e.message);
+    }
+    setIsPublishing(false);
+  };
+
+  const generateTopics = async () => {
+    setIsGeneratingTopics(true);
+    try {
+      const apiKey = provider === 'gemini' ? apiKeys.gemini : apiKeys.openai;
+      const res = await fetch(`/api/topics/generate?provider=${provider}&model=${encodeURIComponent(textModel)}&apiKey=${encodeURIComponent(apiKey)}`);
+      const data = await res.json();
+      if (data.topics && Array.isArray(data.topics)) {
+        setSuggestedTopics(data.topics);
+      } else {
+        alert('Failed to generate topics: ' + (data.error || 'Unknown error'));
+      }
+    } catch (e: any) {
+      alert('Error generating topics: ' + e.message);
+    }
+    setIsGeneratingTopics(false);
+  };
 
   const runPipeline = () => {
     if (!topic) return;
@@ -56,7 +173,8 @@ export default function App() {
       eventSourceRef.current.close();
     }
 
-    const es = new EventSource(`/api/pipeline/stream?topic=${encodeURIComponent(topic)}`);
+    const apiKey = provider === 'gemini' ? apiKeys.gemini : apiKeys.openai;
+    const es = new EventSource(`/api/pipeline/stream?topic=${encodeURIComponent(topic)}&provider=${provider}&textModel=${encodeURIComponent(textModel)}&imageModel=${encodeURIComponent(imageModel)}&apiKey=${encodeURIComponent(apiKey)}`);
     eventSourceRef.current = es;
 
     es.onmessage = (event) => {
@@ -110,16 +228,20 @@ export default function App() {
           <p className="text-xs text-zinc-500 mt-1">Headless WP Engine</p>
         </div>
         <nav className="flex-1 p-4 space-y-1">
-          <NavItem icon={LayoutDashboard} label="Dashboard" active />
-          <NavItem icon={FileText} label="Content Calendar" />
-          <NavItem icon={Settings} label="Settings" />
+          <NavItem icon={LayoutDashboard} label="Dashboard" active={activeTab === 'dashboard'} onClick={() => setActiveTab('dashboard')} />
+          <NavItem icon={FileText} label="Content Calendar" active={activeTab === 'calendar'} onClick={() => setActiveTab('calendar')} />
+          <NavItem icon={Settings} label="Settings" active={activeTab === 'settings'} onClick={() => setActiveTab('settings')} />
         </nav>
       </aside>
 
       {/* Main Content */}
       <main className="flex-1 flex flex-col h-screen overflow-hidden">
         <header className="bg-white border-b border-zinc-200 px-8 py-5 flex items-center justify-between shrink-0">
-          <h1 className="text-2xl font-semibold tracking-tight">Pipeline Runner</h1>
+          <h1 className="text-2xl font-semibold tracking-tight">
+            {activeTab === 'dashboard' && 'Pipeline Runner'}
+            {activeTab === 'calendar' && 'Content Calendar'}
+            {activeTab === 'settings' && 'Settings'}
+          </h1>
           <div className="flex items-center gap-3">
             <span className="flex items-center gap-2 text-sm font-medium text-emerald-600 bg-emerald-50 px-3 py-1.5 rounded-full">
               <div className="w-2 h-2 rounded-full bg-emerald-500 animate-pulse" />
@@ -131,11 +253,174 @@ export default function App() {
         <div className="flex-1 overflow-auto p-8">
           <div className="max-w-5xl mx-auto space-y-8">
             
-            {/* Input Section */}
+            {activeTab === 'settings' && (
+              <div className="bg-white p-8 rounded-2xl shadow-sm border border-zinc-200">
+                <h2 className="text-xl font-semibold mb-6">API Configuration</h2>
+                <p className="text-zinc-500 mb-8 text-sm">
+                  Configure your API keys here. These keys are stored locally in your browser. 
+                  Alternatively, you can configure the Gemini API key in the AI Studio Secrets panel.
+                </p>
+                
+                <div className="space-y-6">
+                  <div>
+                    <label className="block text-sm font-medium text-zinc-700 mb-2">Gemini API Key</label>
+                    <input
+                      type="password"
+                      value={apiKeys.gemini}
+                      onChange={(e) => saveApiKeys({ ...apiKeys, gemini: e.target.value })}
+                      className="w-full bg-zinc-50 border border-zinc-200 rounded-xl px-4 py-3 outline-none focus:ring-2 focus:ring-emerald-500/20 focus:border-emerald-500 transition-all"
+                      placeholder="AIzaSy..."
+                    />
+                  </div>
+                  <div>
+                    <label className="block text-sm font-medium text-zinc-700 mb-2">OpenAI API Key (Optional)</label>
+                    <input
+                      type="password"
+                      value={apiKeys.openai}
+                      onChange={(e) => saveApiKeys({ ...apiKeys, openai: e.target.value })}
+                      className="w-full bg-zinc-50 border border-zinc-200 rounded-xl px-4 py-3 outline-none focus:ring-2 focus:ring-emerald-500/20 focus:border-emerald-500 transition-all"
+                      placeholder="sk-..."
+                    />
+                  </div>
+                  <div>
+                    <label className="block text-sm font-medium text-zinc-700 mb-2">Anthropic API Key (Optional)</label>
+                    <input
+                      type="password"
+                      value={apiKeys.anthropic}
+                      onChange={(e) => saveApiKeys({ ...apiKeys, anthropic: e.target.value })}
+                      className="w-full bg-zinc-50 border border-zinc-200 rounded-xl px-4 py-3 outline-none focus:ring-2 focus:ring-emerald-500/20 focus:border-emerald-500 transition-all"
+                      placeholder="sk-ant-..."
+                    />
+                  </div>
+
+                  <hr className="border-zinc-200 my-8" />
+                  <h2 className="text-xl font-semibold mb-6">WordPress Configuration</h2>
+                  
+                  <div>
+                    <label className="block text-sm font-medium text-zinc-700 mb-2">WordPress Site URL</label>
+                    <input
+                      type="url"
+                      value={apiKeys.wpUrl}
+                      onChange={(e) => saveApiKeys({ ...apiKeys, wpUrl: e.target.value })}
+                      className="w-full bg-zinc-50 border border-zinc-200 rounded-xl px-4 py-3 outline-none focus:ring-2 focus:ring-emerald-500/20 focus:border-emerald-500 transition-all"
+                      placeholder="https://your-site.com"
+                    />
+                  </div>
+                  <div>
+                    <label className="block text-sm font-medium text-zinc-700 mb-2">WordPress Username</label>
+                    <input
+                      type="text"
+                      value={apiKeys.wpUser}
+                      onChange={(e) => saveApiKeys({ ...apiKeys, wpUser: e.target.value })}
+                      className="w-full bg-zinc-50 border border-zinc-200 rounded-xl px-4 py-3 outline-none focus:ring-2 focus:ring-emerald-500/20 focus:border-emerald-500 transition-all"
+                      placeholder="admin"
+                    />
+                  </div>
+                  <div>
+                    <label className="block text-sm font-medium text-zinc-700 mb-2">Application Password</label>
+                    <input
+                      type="password"
+                      value={apiKeys.wpPassword}
+                      onChange={(e) => saveApiKeys({ ...apiKeys, wpPassword: e.target.value })}
+                      className="w-full bg-zinc-50 border border-zinc-200 rounded-xl px-4 py-3 outline-none focus:ring-2 focus:ring-emerald-500/20 focus:border-emerald-500 transition-all"
+                      placeholder="xxxx xxxx xxxx xxxx"
+                    />
+                    <p className="text-xs text-zinc-500 mt-2">Generate this in your WordPress Admin &gt; Users &gt; Profile &gt; Application Passwords.</p>
+                  </div>
+                </div>
+              </div>
+            )}
+
+            {activeTab === 'calendar' && (
+              <div className="bg-white p-8 rounded-2xl shadow-sm border border-zinc-200 flex flex-col items-center justify-center h-96 text-zinc-400">
+                <FileText className="w-12 h-12 mb-4 stroke-1" />
+                <p>Content Calendar module is coming soon.</p>
+              </div>
+            )}
+
+            {activeTab === 'dashboard' && (
+              <>
+                {/* AI Configuration Section */}
+                <div className="bg-white p-6 rounded-2xl shadow-sm border border-zinc-200 mb-8">
+                  <h2 className="text-sm font-semibold text-zinc-500 uppercase tracking-wider mb-4">AI Configuration</h2>
+                  <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
+                    <div>
+                      <label className="block text-sm font-medium text-zinc-700 mb-2">Provider</label>
+                      <select 
+                        value={provider}
+                        onChange={(e) => {
+                          setProvider(e.target.value as 'gemini' | 'openai');
+                          if (e.target.value === 'openai') {
+                            setImageModel('dall-e-3');
+                          } else {
+                            setImageModel('gemini-2.5-flash-image');
+                          }
+                        }}
+                        className="w-full bg-zinc-50 border border-zinc-200 rounded-xl px-4 py-2.5 outline-none focus:ring-2 focus:ring-emerald-500/20 focus:border-emerald-500 transition-all"
+                      >
+                        <option value="gemini">Google Gemini</option>
+                        <option value="openai">OpenAI</option>
+                      </select>
+                    </div>
+                    <div>
+                      <label className="block text-sm font-medium text-zinc-700 mb-2">
+                        Text Model {isLoadingModels && <Loader2 className="inline w-3 h-3 animate-spin ml-1" />}
+                      </label>
+                      <select 
+                        value={textModel}
+                        onChange={(e) => setTextModel(e.target.value)}
+                        className="w-full bg-zinc-50 border border-zinc-200 rounded-xl px-4 py-2.5 outline-none focus:ring-2 focus:ring-emerald-500/20 focus:border-emerald-500 transition-all"
+                      >
+                        {availableModels.length > 0 ? (
+                          availableModels.map(m => <option key={m} value={m}>{m}</option>)
+                        ) : (
+                          <option value={textModel}>{textModel}</option>
+                        )}
+                      </select>
+                    </div>
+                    <div>
+                      <label className="block text-sm font-medium text-zinc-700 mb-2">Image Model</label>
+                      <select 
+                        value={imageModel}
+                        onChange={(e) => setImageModel(e.target.value)}
+                        className="w-full bg-zinc-50 border border-zinc-200 rounded-xl px-4 py-2.5 outline-none focus:ring-2 focus:ring-emerald-500/20 focus:border-emerald-500 transition-all"
+                      >
+                        {provider === 'gemini' ? (
+                          <>
+                            <option value="gemini-2.5-flash-image">gemini-2.5-flash-image</option>
+                            <option value="gemini-3.1-flash-image-preview">gemini-3.1-flash-image-preview</option>
+                          </>
+                        ) : (
+                          <>
+                            <option value="dall-e-3">dall-e-3</option>
+                            <option value="dall-e-2">dall-e-2</option>
+                          </>
+                        )}
+                      </select>
+                    </div>
+                  </div>
+                  {((provider === 'gemini' && !apiKeys.gemini) || (provider === 'openai' && !apiKeys.openai)) && (
+                    <p className="text-sm text-amber-600 mt-3">
+                      ⚠️ Please configure your {provider === 'gemini' ? 'Gemini' : 'OpenAI'} API key in the Settings tab.
+                    </p>
+                  )}
+                </div>
+
+                {/* Input Section */}
             <div className="bg-white p-6 rounded-2xl shadow-sm border border-zinc-200">
-              <label className="block text-sm font-medium text-zinc-700 mb-2">
-                Target Topic or Keyword
-              </label>
+              <div className="flex justify-between items-center mb-2">
+                <label className="block text-sm font-medium text-zinc-700">
+                  Target Topic or Keyword
+                </label>
+                <button 
+                  onClick={generateTopics} 
+                  disabled={isGeneratingTopics || isRunning}
+                  className="text-xs text-emerald-600 hover:text-emerald-700 font-medium flex items-center gap-1 disabled:opacity-50"
+                >
+                  {isGeneratingTopics ? <Loader2 className="w-3 h-3 animate-spin" /> : <Sparkles className="w-3 h-3" />}
+                  {isGeneratingTopics ? 'Researching...' : 'Suggest Trending Topics'}
+                </button>
+              </div>
               <div className="flex gap-4">
                 <input
                   type="text"
@@ -158,6 +443,19 @@ export default function App() {
                   {isRunning ? 'Generating...' : 'Start Pipeline'}
                 </button>
               </div>
+              {suggestedTopics.length > 0 && (
+                <div className="mt-4 flex flex-wrap gap-2">
+                  {suggestedTopics.map((t, i) => (
+                    <button 
+                      key={i}
+                      onClick={() => setTopic(t)}
+                      className="text-xs bg-emerald-50 text-emerald-700 border border-emerald-200 px-3 py-1.5 rounded-full hover:bg-emerald-100 transition-colors text-left"
+                    >
+                      {t}
+                    </button>
+                  ))}
+                </div>
+              )}
             </div>
 
             <div className="grid grid-cols-1 lg:grid-cols-3 gap-8">
@@ -211,8 +509,13 @@ export default function App() {
                   <div className="px-6 py-4 border-b border-zinc-100 bg-zinc-50/50 flex items-center justify-between">
                     <h2 className="text-sm font-semibold text-zinc-700">Live Preview</h2>
                     {finalResult && (
-                      <button className="text-sm bg-emerald-500 hover:bg-emerald-600 text-white px-4 py-1.5 rounded-lg font-medium transition-colors">
-                        Publish to WordPress
+                      <button 
+                        onClick={publishToWordPress}
+                        disabled={isPublishing}
+                        className="text-sm bg-emerald-500 hover:bg-emerald-600 text-white px-4 py-1.5 rounded-lg font-medium transition-colors disabled:opacity-50 flex items-center gap-2"
+                      >
+                        {isPublishing ? <Loader2 className="w-4 h-4 animate-spin" /> : null}
+                        {isPublishing ? 'Publishing...' : 'Publish to WordPress'}
                       </button>
                     )}
                   </div>
@@ -271,6 +574,8 @@ export default function App() {
                 </div>
               </div>
             </div>
+            </>
+            )}
 
           </div>
         </div>
@@ -279,9 +584,11 @@ export default function App() {
   );
 }
 
-function NavItem({ icon: Icon, label, active }: { icon: any, label: string, active?: boolean }) {
+function NavItem({ icon: Icon, label, active, onClick }: { icon: any, label: string, active?: boolean, onClick?: () => void }) {
   return (
-    <button className={cn(
+    <button 
+      onClick={onClick}
+      className={cn(
       "w-full flex items-center gap-3 px-3 py-2.5 rounded-xl text-sm font-medium transition-colors",
       active 
         ? "bg-zinc-900 text-white" 
